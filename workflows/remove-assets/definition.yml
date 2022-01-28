@@ -1,0 +1,90 @@
+name: ${self:service}-${self:provider.stage}-remove-assets
+definition:
+  Comment: delete the specified asset(s) from the input stac item(s) as well as  the underlying file(s) from S3
+  StartAt: remove-assets-batch-or-lambda
+  States:
+    remove-assets-batch-or-lambda:
+      Type: Choice
+      Choices:
+        - Variable: "$.process.tasks.remove-assets.batch"
+          IsPresent: false
+          Next: remove-assets
+        - Variable: "$.process.tasks.remove-assets.batch"
+          BooleanEquals: false
+          Next: remove-assets
+        - Variable: "$.process.tasks.remove-assets.batch"
+          BooleanEquals: true
+          Next: remove-assets-pre-batch
+
+    remove-assets-pre-batch:
+      Type: Task
+      Resource:
+        Fn::GetAtt: [pre-batch, Arn]
+      Next: remove-assets-batch
+      Retry:
+        - ErrorEquals: ["Lambda.TooManyRequestsException", "Lambda.Unknown"]
+          IntervalSeconds: 1
+          BackoffRate: 2.0
+          MaxAttempts: 5
+      Catch:
+        - ErrorEquals: ["States.ALL"]
+          ResultPath: $.error
+          Next: failure
+    
+    remove-assets-batch:
+      Type: Task
+      Resource: arn:aws:states:::batch:submitJob.sync
+      Parameters:
+        JobName: remove-assets-batch
+        JobQueue: "#{RemoveAssetsJobQueue}"
+        JobDefinition: "#{RemoveAssetsAsBatchJob}"
+        Parameters:
+          url.$: "$.url"
+      Next: remove-assets-post-batch
+      Retry:
+        - ErrorEquals: ["Batch.AWSBatchException", "States.TaskFailed"]
+          IntervalSeconds: 10.0
+          BackoffRate: 2.0
+          MaxAttempts: 3
+      Catch:
+        - ErrorEquals: ["States.ALL"]
+          ResultPath: $.error
+          Next: remove-assets-post-batch
+    
+    remove-assets-post-batch:
+      Type: Task
+      Resource:
+        Fn::GetAtt: [post-batch, Arn]
+      Next: publish
+      Retry:
+        - ErrorEquals: ["Lambda.TooManyRequestsException", "Lambda.Unknown"]
+          IntervalSeconds: 1
+          BackoffRate: 2.0
+          MaxAttempts: 5
+      Catch:
+        - ErrorEquals: ["States.ALL"]
+          ResultPath: $.error
+          Next: failure
+
+    remove-assets:
+      Type: Task
+      Resource:
+        Fn:GetAtt: [remove-assets, Arn]
+      Next: publish
+
+    publish:
+      Type: Task
+      Resource:
+        Fn::GetAtt: [publish, Arn]
+      End: True
+      Retry:
+        - ErrorEquals: ["Lambda.TooManyRequestsException", "Lambda.Unknown"]
+          IntervalSeconds: 1
+          BackoffRate: 2.0
+          MaxAttempts: 5
+      Catch:
+        - ErrorEquals: ["States.ALL"]
+          ResultPath: $.error
+          Next: failure
+    failure:
+      Type: Fail
