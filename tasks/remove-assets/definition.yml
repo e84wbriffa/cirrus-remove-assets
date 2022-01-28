@@ -1,0 +1,80 @@
+description: Remove specified asset(s) from STAC item(s)
+iamRoleStatements:
+  - Effect: "Allow"
+    Action:
+      - "s3:ListBucket"
+      - "s3:GetObject"
+      - "s3:GetBucketLocation"
+    Resource: "*"
+  - Effect: "Allow"
+    Action:
+      - "s3:PutObject"
+    Resource:
+      - !Join
+        - ''
+        - - 'arn:aws:s3:::'
+          - ${self:provider.environment.CIRRUS_DATA_BUCKET}
+          - '*'
+  - Effect: "Allow"
+    Action: secretsmanager:GetSecretValue
+    Resource:
+      - arn:aws:secretsmanager:#{AWS::Region}:#{AWS::AccountId}:secret:cirrus*
+environment: {}
+
+lambda:
+  memorySize: 128
+  timeout: 60
+  pythonRequirements:
+    include: []
+
+batch:
+  resources:
+      Resources:
+        remove-assetsComputeEnvironment:
+          Type: AWS::Batch::ComputeEnvironment
+          Properties:
+            Type: MANAGED
+            ServiceRole:
+              Fn::GetAtt: [ BatchServiceRole, Arn ]
+            ComputeResources:
+              MaxvCpus: 1000
+              SecurityGroupIds: ${self:custom.batch.SecurityGroupIds}
+              Subnets: ${self:custom.batch.Subnets}
+              InstanceTypes:
+                - optimal
+              Type: SPOT
+              AllocationStrategy: BEST_FIT_PROGRESSIVE
+              SpotIamFleetRole:
+                Fn::GetAtt: [ EC2SpotRole, Arn ]
+              MinvCpus: 0
+              InstanceRole:
+                Fn::GetAtt: [ BatchInstanceProfile, Arn ]
+              Tags: {"Name": "Batch Instance - #{AWS::StackName}"}
+              DesiredvCpus: 0
+            State: ENABLED
+        remove-assetsJobQueue:
+          Type: AWS::Batch::JobQueue
+          Properties:
+            ComputeEnvironmentOrder:
+              - Order: 1
+                ComputeEnvironment: !Ref remove-assetsComputeEnvironment
+            State: ENABLED
+            Priority: 1
+        remove-assetsAsBatchJob:
+          Type: "AWS::Batch::JobDefinition"
+          Properties:
+            JobDefinitionName: '#{AWS::StackName}-remove-assets'
+            Type: Container
+            Parameters:
+              url: ""
+            ContainerProperties:
+              Command:
+                - run
+                - ${self:service}-${self:provider.stage}-remove-assets
+                - Ref::url
+              Environment: []
+              Memory: 128
+              Vcpus: 1
+              Image: 'cirrusgeo/run-lambda:0.2.1'
+            RetryStrategy:
+              Attempts: 1
